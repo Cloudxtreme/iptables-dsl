@@ -1,0 +1,193 @@
+# -*- sh -*-*
+
+
+ensure_count()
+{
+    ct=$1
+    shift
+    if [[ $# < $ct ]]; then
+        echo "Expected $ct arguments"
+        exit 1
+    fi
+}
+CC=""
+ensure_chain()
+{
+    if [[ -z "$CC" ]]; then
+        echo "Must be used in a chain"
+        exit 1
+    fi
+}
+
+NAT_INTERFACE=""
+ensure_setting()
+{
+    if [[ -z "$1" ]]; then
+        echo "Missing variable $2"
+        exit 1
+    fi
+}
+
+table()
+{
+    ensure_count 1 "$@"
+    echo "*$1"
+}
+
+endtable()
+{
+    echo COMMIT
+}
+
+default()
+{
+    ensure_count 2 "$@"
+    echo :$1 $2
+}
+
+chain()
+{
+    ensure_count 1 "$"@
+    CC="$1"
+}
+endchain()
+{
+    CC=""
+}
+
+dnat()
+{
+    ensure_count 2 "$@"
+    ensure_chain
+    ensure_setting $NAT_INTERFACE NAT_INTERFACE
+
+    dest=${1%:*}
+    dport=${1#*:}
+    nat_to=$2
+    echo "-A $CC -d $dest -i $NAT_INTERFACE -p tcp -m tcp --dport $dport -j DNAT --to-destination $nat_to"
+}
+
+snat()
+{
+    ensure_count 2 "$@"
+    ensure_chain
+    ensure_setting $NAT_INTERFACE NAT_INTERFACE
+
+    local_src="$1"
+    ext_src="$2"
+    echo "-A $CC -s $local_src -o $NAT_INTERFACE -j SNAT --to-source $ext_src"
+}
+masquerade()
+{
+    ensure_setting $NAT_INTERFACE NAT_INTERFACE
+    echo "-A $CC -o $NAT_INTERFACE -j MASQUERADE"
+}
+
+host()
+{
+    echo ${1%:*}
+}
+
+port()
+{
+    p="${1#*:}"
+    if [[ $p = $1 ]]; then 
+        echo
+    else
+        echo $p
+    fi
+}
+
+rule()
+{
+    ensure_chain
+    r="-A $CC"
+    proto=""
+    while [[ $# > 0 ]]; do
+        case $1 in
+            if)
+                r="$r -i $2"
+                ;;
+            to)
+                h=`host $2`
+                p=`port $2`
+                if [[ -n $h ]]; then
+                    r="$r -d $h"
+                fi
+                if [[ -n $p ]]; then
+                    if [[ -n "$proto" ]]; then
+                        r="$r -m $proto"; proto=""
+                    fi
+                    r="$r --dport $p"
+                fi
+                ;;
+            from)
+                h=`host $2`
+                p=`port $2`
+                if [[ -n $h ]]; then
+                    r="$r -s $h"
+                fi
+                if [[ -n $p ]]; then
+                    if [[ -n "$proto" ]]; then
+                        r="$r -m $proto"; proto=""
+                    fi
+                    r="$r --sport $p"
+                fi
+                ;;
+            proto)
+                proto=$2
+                r="$r -p $2"
+                ;;
+            type)
+                r="$r -m state"
+                case $2 in
+                    connect)
+                        r="$r --state NEW,ESTABLISHED"
+                        ;;
+                    response)
+                        r="$r --state ESTABLISHED"
+                        ;;
+                    related)
+                        r="$r --state RELATED"
+                        ;;
+                    related_or_established|apps)
+                        r="$r --state RELATED,ESTABLISHED"
+                        ;;
+                esac
+                ;;
+            -*)
+                r="$r $1 $2"
+                ;;
+            *)
+                echo "Unexpected param: $1"
+                exit 1
+        esac
+        shift 2;
+    done
+    echo $r
+}
+
+accept()
+{
+     echo `rule "$@"` -j ACCEPT
+}
+
+reject()
+{
+    icmp=$1
+    shift;
+    echo `rule "$@"` -j REJECT --reject-with $icmp
+}
+
+log()
+{
+    ensure_chain
+    echo "-A $CC -j LOG --log-prefix \"$1\""
+}
+
+through()
+{
+    ensure_count 3 "$@"
+    ensure_chain
+    echo "-A $CC -i $1 -o $2 -j $3"
+}
