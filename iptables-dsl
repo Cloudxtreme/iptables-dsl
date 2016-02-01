@@ -172,7 +172,7 @@ rule()
                 esac
                 ;;
             -*)
-                r="$r $1 $2"
+                r="$r $1 \"$2\""
                 ;;
             *)
                 echo "Unexpected param: $1"
